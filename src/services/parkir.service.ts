@@ -21,7 +21,7 @@ export interface TransaksiData {
   jenis: string;
   jam_masuk: string;
   jam_keluar: string;
-  total_menit: number;
+  total_menit: number; // Actual column name in database
   total_bayar: number;
   created_at?: string;
 }
@@ -167,6 +167,15 @@ export async function keluarParkir(id: string, tarifPerJam: number) {
   const jamTerhitung = Math.max(1, Math.ceil(totalMenit / 60));
   const totalBayar = jamTerhitung * tarifPerJam;
 
+  console.log("Parking duration:", {
+    jamMasuk,
+    jamKeluar,
+    diffMs,
+    totalMenit,
+    jamTerhitung,
+    totalBayar,
+  });
+
   // 2. Save to Transaction table (History)
   const { error: errInsert } = await supabase.from("transaksi").insert({
     id_kendaraan: kendaraan.id,
@@ -174,7 +183,7 @@ export async function keluarParkir(id: string, tarifPerJam: number) {
     jenis: kendaraan.jenis,
     jam_masuk: kendaraan.jam_masuk,
     jam_keluar: jamKeluar.toISOString(),
-    total_menit: totalMenit,
+    total_menit: totalMenit, // Actual column name in database
     total_bayar: totalBayar,
   });
 

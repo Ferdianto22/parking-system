@@ -7,6 +7,7 @@ import {
   Car,
   CheckCircle2,
 } from "lucide-react";
+import { BrowserQRCodeReader } from "@zxing/library";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -35,6 +36,8 @@ export function AdminScanner({ onNavigate }: NavigationProps) {
   const [activeVehicles, setActiveVehicles] = useState<KendaraanAktif[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [cameraActive, setCameraActive] = useState(false);
+  const qrReaderRef = useRef<BrowserQRCodeReader | null>(null);
+  const [scanning, setScanning] = useState(false);
 
   const loadActiveVehicles = useCallback(async () => {
     try {
@@ -131,6 +134,9 @@ export function AdminScanner({ onNavigate }: NavigationProps) {
   };
 
   const startCamera = async () => {
+    // First, stop any existing camera streams
+    stopCamera();
+
     try {
       console.log("Requesting camera access...");
 
@@ -141,31 +147,71 @@ export function AdminScanner({ onNavigate }: NavigationProps) {
         );
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "environment",
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-      });
+      // Try with optimized constraints for QR scanning
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "environment",
+            width: { ideal: 1920, min: 640 },
+            height: { ideal: 1080, min: 480 },
+            focusMode: "continuous",
+            advanced: [{ focusMode: "continuous" }],
+          } as any,
+        });
+        console.log("✓ High-res camera with autofocus enabled");
+      } catch (err) {
+        // Fallback to simpler constraints
+        console.log("Trying fallback camera constraints...");
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        });
+      }
 
       console.log("Camera access granted:", stream);
+      console.log("Stream tracks:", stream.getTracks());
 
       if (videoRef.current) {
+        // Clear any existing source
+        videoRef.current.srcObject = null;
+
+        // Set new stream
         videoRef.current.srcObject = stream;
-        // Wait for video to load and play
-        videoRef.current.onloadedmetadata = () => {
+
+        console.log("Video element srcObject set:", videoRef.current.srcObject);
+
+        // Wait for video to load metadata and play
+        videoRef.current.onloadedmetadata = async () => {
           console.log("Video metadata loaded");
-          videoRef.current
-            ?.play()
-            .then(() => {
-              console.log("Video playing");
-              setCameraActive(true);
-            })
-            .catch((playErr) => {
-              console.error("Error playing video:", playErr);
-              alert("Gagal memutar video kamera: " + playErr.message);
-            });
+          console.log(
+            "Video dimensions:",
+            videoRef.current?.videoWidth,
+            "x",
+            videoRef.current?.videoHeight
+          );
+
+          try {
+            await videoRef.current?.play();
+            console.log("Video playing successfully");
+            setCameraActive(true); // Only set active after successful play
+          } catch (playErr) {
+            console.error("Error playing video:", playErr);
+            alert("Gagal memutar video kamera: " + playErr);
+            // Stop the stream if play fails
+            stream.getTracks().forEach((track) => track.stop());
+            setCameraActive(false);
+          }
+        };
+
+        // Also handle errors
+        videoRef.current.onerror = (err) => {
+          console.error("Video element error:", err);
+          alert("Error pada video element");
+          stream.getTracks().forEach((track) => track.stop());
+          setCameraActive(false);
         };
       }
     } catch (err: any) {
@@ -204,7 +250,8 @@ export function AdminScanner({ onNavigate }: NavigationProps) {
           "Tutup aplikasi lain yang menggunakan kamera:\n" +
           "- Zoom, Teams, Skype\n" +
           "- Browser tab lain\n" +
-          "- Aplikasi kamera lainnya";
+          "- Aplikasi kamera lainnya\n\n" +
+          "Setelah menutup aplikasi lain, coba klik 'Aktifkan Kamera' lagi.";
       } else if (err.name === "OverconstrainedError") {
         errorMessage +=
           "❌ Kamera tidak mendukung resolusi yang diminta!\n\n" +
@@ -228,12 +275,153 @@ export function AdminScanner({ onNavigate }: NavigationProps) {
   };
 
   const stopCamera = () => {
+    // Stop QR reader
+    if (qrReaderRef.current) {
+      qrReaderRef.current.reset();
+      qrReaderRef.current = null;
+    }
+
+    // Stop video stream
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
+      stream.getTracks().forEach((track) => {
+        track.stop();
+        console.log("Stopped camera track:", track.label);
+      });
+      videoRef.current.srcObject = null;
       setCameraActive(false);
+      setScanning(false);
     }
   };
+
+  // Start QR code scanning
+  const startQRScanning = () => {
+    if (!videoRef.current || !cameraActive) {
+      console.log("Cannot start scanning: video not ready");
+      return;
+    }
+
+    try {
+      setScanning(true);
+      console.log("Starting QR code scanning...");
+
+      const codeReader = new BrowserQRCodeReader();
+      qrReaderRef.current = codeReader;
+
+      let scanCount = 0;
+
+      // Continuously scan from video element
+      const scanFrame = async () => {
+        if (!videoRef.current || !scanning) {
+          console.log("Scan stopped");
+          return;
+        }
+
+        scanCount++;
+        if (scanCount % 30 === 0) {
+          console.log(`Scanning... (${scanCount} frames)`);
+        }
+
+        try {
+          const result = await codeReader.decodeFromVideoElement(
+            videoRef.current
+          );
+          if (result) {
+            const qrData = result.getText();
+            console.log("✅ QR Code detected:", qrData);
+
+            // Stop scanning temporarily
+            setScanning(false);
+
+            // Process the scanned ticket ID
+            await handleQRCodeScanned(qrData);
+            return;
+          }
+        } catch (error: any) {
+          // NotFoundException is normal when no QR code is visible
+          if (error.name !== "NotFoundException") {
+            console.error("QR scan error:", error);
+          }
+        }
+
+        // Continue scanning
+        if (scanning) {
+          requestAnimationFrame(scanFrame);
+        }
+      };
+
+      scanFrame();
+      console.log("QR scanner active");
+    } catch (error) {
+      console.error("Failed to start QR scanning:", error);
+      setScanning(false);
+    }
+  };
+
+  // Handle scanned QR code
+  const handleQRCodeScanned = async (ticketId: string) => {
+    console.log("Processing ticket ID:", ticketId);
+
+    // Validate UUID format
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(ticketId)) {
+      alert("QR Code tidak valid! Bukan tiket parkir.");
+      setTimeout(() => setScanning(true), 2000);
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const found = await getKendaraanById(ticketId);
+
+      const now = Date.now();
+      const jamMasuk = new Date(found.jam_masuk).getTime();
+      const diff = now - jamMasuk;
+
+      // Calculate duration
+      const totalMinutes = Math.floor(diff / (1000 * 60));
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+      const durationStr = `${hours}j ${minutes}m`;
+
+      // Calculate fee
+      const billableHours = Math.max(1, Math.ceil(diff / (1000 * 60 * 60)));
+      const biaya =
+        billableHours * (TARIF[found.jenis as keyof typeof TARIF] || 0);
+
+      setKendaraan(found);
+      setDuration(durationStr);
+      setTotalBiaya(biaya);
+      setJamTerhitung(billableHours);
+      setShowSuccess(false);
+
+      // Stop camera after successful scan
+      stopCamera();
+    } catch (error: any) {
+      console.error("Error finding vehicle:", error);
+      alert(error.message || "Tiket tidak ditemukan");
+      // Resume scanning after error
+      setTimeout(() => setScanning(true), 2000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Auto-start QR scanning when camera becomes active
+  useEffect(() => {
+    if (cameraActive && !scanning && !kendaraan) {
+      startQRScanning();
+    }
+  }, [cameraActive, scanning, kendaraan]);
+
+  // Cleanup camera on unmount
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
 
   return (
     <div className="min-h-screen p-4 md:p-8">
@@ -265,31 +453,44 @@ export function AdminScanner({ onNavigate }: NavigationProps) {
           </div>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-6">
+        <div className="grid lg:grid-cols-[1.2fr,1fr] gap-6">
           <Card className="p-6 space-y-4">
             <div>
               <h3>Scanner QR Code</h3>
               <p className="text-muted-foreground">Scan tiket pengendara</p>
             </div>
 
-            <div className="aspect-square bg-gray-900 rounded-lg overflow-hidden flex items-center justify-center relative">
-              {cameraActive ? (
-                <>
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute inset-0 border-4 border-white/30 m-8 rounded-lg" />
-                </>
-              ) : (
+            <div className="aspect-video bg-gray-900 rounded-lg overflow-hidden flex items-center justify-center relative min-h-[400px]">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className={`w-full h-full object-cover ${
+                  cameraActive ? "block" : "hidden"
+                }`}
+                style={{ minHeight: "400px" }}
+              />
+              {cameraActive && (
+                <div className="absolute inset-0 border-4 border-green-500/50 m-8 rounded-lg pointer-events-none" />
+              )}
+              {!cameraActive && (
                 <div className="text-center text-white/60 p-8">
                   <Camera className="w-16 h-16 mx-auto mb-4" />
                   <p>Kamera belum aktif</p>
+                  <p className="text-sm mt-2">
+                    Klik tombol di bawah untuk mengaktifkan
+                  </p>
                 </div>
               )}
             </div>
+
+            {cameraActive && (
+              <div className="text-xs text-muted-foreground bg-blue-50 p-3 rounded border border-blue-200">
+                💡 <strong>Tips:</strong> Pegang QR code stabil, jarak 15-30cm
+                dari kamera. Pastikan pencahayaan cukup dan QR code tidak blur.
+              </div>
+            )}
 
             <div className="space-y-2">
               {!cameraActive ? (
@@ -407,8 +608,10 @@ export function AdminScanner({ onNavigate }: NavigationProps) {
                   </div>
                   <p className="text-muted-foreground">
                     Tarif {kendaraan.jenis}: Rp{" "}
-                    {TARIF[kendaraan.jenis].toLocaleString("id-ID")}/jam ×{" "}
-                    {jamTerhitung} jam
+                    {TARIF[
+                      kendaraan.jenis as keyof typeof TARIF
+                    ].toLocaleString("id-ID")}
+                    /jam × {jamTerhitung} jam
                   </p>
                 </div>
 
@@ -446,73 +649,79 @@ export function AdminScanner({ onNavigate }: NavigationProps) {
             <summary className="cursor-pointer text-sm font-medium mb-2">
               🚗 Kendaraan Aktif di Parkir
             </summary>
-            <div className="space-y-2 mt-3">
+            <div className="mt-3">
               {activeVehicles.length === 0 ? (
                 <p className="text-muted-foreground text-sm">
                   Tidak ada kendaraan parkir. Buat tiket dulu di halaman driver.
                 </p>
               ) : (
-                activeVehicles.map((v) => (
-                  <div
-                    key={v.id}
-                    className="p-3 bg-white rounded border space-y-2"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium tracking-wider text-lg">
-                        {v.plat_nomor}
-                      </span>
-                      <Badge variant="outline">{v.jenis}</Badge>
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Masuk:{" "}
-                      {new Date(v.jam_masuk).toLocaleTimeString("id-ID", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}{" "}
-                      WIB
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="default"
-                      className="w-full mt-2"
-                      onClick={async () => {
-                        setPlatInput(v.plat_nomor);
-                        setLoading(true);
-
-                        try {
-                          const found = await getKendaraanByPlat(v.plat_nomor);
-
-                          const now = Date.now();
-                          const jamMasuk = new Date(found.jam_masuk).getTime();
-                          const diff = now - jamMasuk;
-                          const totalMinutes = Math.floor(diff / (1000 * 60));
-                          const hours = Math.floor(totalMinutes / 60);
-                          const minutes = totalMinutes % 60;
-                          const durationStr = `${hours}j ${minutes}m`;
-                          const billableHours = Math.max(
-                            1,
-                            Math.ceil(diff / (1000 * 60 * 60))
-                          );
-                          const biaya =
-                            billableHours *
-                            (TARIF[found.jenis as keyof typeof TARIF] || 0);
-
-                          setKendaraan(found);
-                          setDuration(durationStr);
-                          setTotalBiaya(biaya);
-                          setJamTerhitung(billableHours);
-                          setShowSuccess(false);
-                        } catch (error) {
-                          console.error("Error loading vehicle:", error);
-                        } finally {
-                          setLoading(false);
-                        }
-                      }}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {activeVehicles.map((v) => (
+                    <div
+                      key={v.id}
+                      className="p-3 bg-white rounded border space-y-2"
                     >
-                      Gunakan Plat Ini
-                    </Button>
-                  </div>
-                ))
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium tracking-wider text-base">
+                          {v.plat_nomor}
+                        </span>
+                        <Badge variant="outline">{v.jenis}</Badge>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Masuk:{" "}
+                        {new Date(v.jam_masuk).toLocaleTimeString("id-ID", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}{" "}
+                        WIB
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="w-full mt-2"
+                        onClick={async () => {
+                          setPlatInput(v.plat_nomor);
+                          setLoading(true);
+
+                          try {
+                            const found = await getKendaraanByPlat(
+                              v.plat_nomor
+                            );
+
+                            const now = Date.now();
+                            const jamMasuk = new Date(
+                              found.jam_masuk
+                            ).getTime();
+                            const diff = now - jamMasuk;
+                            const totalMinutes = Math.floor(diff / (1000 * 60));
+                            const hours = Math.floor(totalMinutes / 60);
+                            const minutes = totalMinutes % 60;
+                            const durationStr = `${hours}j ${minutes}m`;
+                            const billableHours = Math.max(
+                              1,
+                              Math.ceil(diff / (1000 * 60 * 60))
+                            );
+                            const biaya =
+                              billableHours *
+                              (TARIF[found.jenis as keyof typeof TARIF] || 0);
+
+                            setKendaraan(found);
+                            setDuration(durationStr);
+                            setTotalBiaya(biaya);
+                            setJamTerhitung(billableHours);
+                            setShowSuccess(false);
+                          } catch (error) {
+                            console.error("Error loading vehicle:", error);
+                          } finally {
+                            setLoading(false);
+                          }
+                        }}
+                      >
+                        Gunakan Plat Ini
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </details>
