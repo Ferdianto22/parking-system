@@ -8,6 +8,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { BrowserQRCodeReader } from "@zxing/library";
+import { WorkingQRScanner } from "./WorkingQRScanner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -460,27 +461,25 @@ export function AdminScanner({ onNavigate }: NavigationProps) {
               <p className="text-muted-foreground">Scan tiket pengendara</p>
             </div>
 
-            <div className="aspect-video bg-gray-900 rounded-lg overflow-hidden flex items-center justify-center relative min-h-[400px]">
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className={`w-full h-full object-cover ${
-                  cameraActive ? "block" : "hidden"
-                }`}
-                style={{ minHeight: "400px" }}
-              />
-              {cameraActive && (
-                <div className="absolute inset-0 border-4 border-green-500/50 m-8 rounded-lg pointer-events-none" />
-              )}
-              {!cameraActive && (
-                <div className="text-center text-white/60 p-8">
-                  <Camera className="w-16 h-16 mx-auto mb-4" />
-                  <p>Kamera belum aktif</p>
-                  <p className="text-sm mt-2">
-                    Klik tombol di bawah untuk mengaktifkan
-                  </p>
+            <div className="aspect-video bg-gray-900 rounded-lg overflow-hidden relative min-h-[400px]">
+              {cameraActive ? (
+                <WorkingQRScanner
+                  isActive={cameraActive}
+                  onScan={(data) => {
+                    console.log("✅ QR Scanned:", data);
+                    setCameraActive(false);
+                    handleQRCodeScanned(data);
+                  }}
+                />
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center text-white/60 p-8">
+                    <Camera className="w-16 h-16 mx-auto mb-4" />
+                    <p>Kamera belum aktif</p>
+                    <p className="text-sm mt-2">
+                      Klik tombol di bawah untuk mengaktifkan
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
@@ -493,20 +492,14 @@ export function AdminScanner({ onNavigate }: NavigationProps) {
             )}
 
             <div className="space-y-2">
-              {!cameraActive ? (
-                <Button onClick={startCamera} className="w-full">
-                  <Camera className="w-4 h-4 mr-2" />
-                  Aktifkan Kamera
-                </Button>
-              ) : (
-                <Button
-                  onClick={stopCamera}
-                  variant="outline"
-                  className="w-full"
-                >
-                  Matikan Kamera
-                </Button>
-              )}
+              <Button
+                onClick={() => setCameraActive(!cameraActive)}
+                className="w-full"
+                variant={cameraActive ? "outline" : "default"}
+              >
+                <Camera className="w-4 h-4 mr-2" />
+                {cameraActive ? "Matikan Kamera" : "Aktifkan Kamera & Scan"}
+              </Button>
             </div>
 
             <div className="pt-4 border-t space-y-3">
