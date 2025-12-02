@@ -1,12 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import {
-  ArrowLeft,
-  Camera,
-  DollarSign,
-  Clock,
-  Car,
-  CheckCircle2,
-} from "lucide-react";
+import { ArrowLeft, Camera, Clock, Car, CheckCircle2 } from "lucide-react";
 import { BrowserQRCodeReader } from "@zxing/library";
 import { WorkingQRScanner } from "./WorkingQRScanner";
 import { Button } from "@/components/ui/button";
@@ -593,8 +586,7 @@ export function AdminScanner({ onNavigate }: NavigationProps) {
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-muted-foreground">Total Biaya:</span>
                     <div className="flex items-center gap-2">
-                      <DollarSign className="w-5 h-5 text-indigo-600" />
-                      <span className="text-indigo-600">
+                      <span className="text-indigo-600 text-2xl font-semibold">
                         Rp {totalBiaya.toLocaleString("id-ID")}
                       </span>
                     </div>
